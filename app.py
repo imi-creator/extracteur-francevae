@@ -6,33 +6,7 @@ import re
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Extracteur France VAE", page_icon="🇫🇷", layout="wide")
 
-# --- SÉCURITÉ (Mot de passe) ---
-def check_password():
-    """Protège l'accès à l'application."""
-    if "password_correct" not in st.session_state:
-        st.session_state.password_correct = False
-
-    if st.session_state.password_correct:
-        return True
-
-    # Le mot de passe est lu dans les Secrets. Défaut: "admin123"
-    pwd_secret = st.secrets.get("APP_PASSWORD", "admin123") 
-
-    st.title("🔒 Connexion")
-    password_input = st.text_input("Mot de passe d'accès", type="password")
-    
-    if st.button("Se connecter"):
-        if password_input == pwd_secret:
-            st.session_state.password_correct = True
-            st.rerun()
-        else:
-            st.error("Mot de passe incorrect")
-    return False
-
-if not check_password():
-    st.stop()
-
-# --- 1. FONCTION D'ANALYSE HTML (Mode Web) ---
+# --- 1. FONCTION D'ANALYSE HTML ---
 def parse_html_content(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     data = {}
@@ -46,13 +20,12 @@ def parse_html_content(html_content):
         phone_tag = soup.find(attrs={"data-testid": "candidate-contact-details-phone"})
         data['phone'] = phone_tag.get_text(strip=True) if phone_tag else ""
 
-        # Nom et Prénom (Logique de séparation)
+        # Nom et Prénom
         info_block = soup.find(attrs={"data-testid": "candidate-information"})
         if info_block:
             dd_tags = info_block.find_all('dd')
             full_name = dd_tags[0].get_text(strip=True) if dd_tags else "Nom inconnu"
             
-            # Séparer nom et prénom (comme dans votre script)
             name_parts = full_name.split(' ', 1)
             data['nom'] = name_parts[0] if name_parts else "Inconnu"
             data['prenom'] = name_parts[1] if len(name_parts) > 1 else ""
@@ -96,11 +69,9 @@ def send_to_clickup(api_key, list_id, data):
         f"📞 **Téléphone:** {data['phone']}\n"
     )
 
-    # Récupérer les champs personnalisés dynamiquement
     fields = get_custom_fields(api_key, list_id)
     custom_fields_payload = []
     
-    # Mapping des données (Clés minuscules pour la recherche)
     mapping_data = {
         "mail": data['email'],
         "email": data['email'],
@@ -119,16 +90,11 @@ def send_to_clickup(api_key, list_id, data):
         field_type = field.get('type', '')
         f_id = field['id']
         
-        # On cherche si un mot clé est dans le nom du champ ClickUp
         for key, value in mapping_data.items():
-            # Matching intelligent : si "nom" est dans le champ, ou égal
             if field_name == key or (key != "nom" and key in field_name):
-                
-                # Formatage spécial pour le téléphone (+33)
                 final_value = value
                 if field_type == 'phone' and value:
                     digits = ''.join(filter(str.isdigit, value))
-                    # Si c'est un 06/07..., on remplace le 0 par +33
                     if digits.startswith('0') and len(digits) == 10:
                         final_value = '+33' + digits[1:]
                     elif not value.startswith('+'):
@@ -143,7 +109,6 @@ def send_to_clickup(api_key, list_id, data):
     payload = {
         "name": f"{data['name']} - {data['certification']}",
         "description": description,
-        # "status": "TO DO",  <-- LIGNE SUPPRIMÉE POUR ÉVITER L'ERREUR 400
         "custom_fields": custom_fields_payload,
         "tags": ["francevae"]
     }
@@ -152,43 +117,33 @@ def send_to_clickup(api_key, list_id, data):
 
 # --- INTERFACE PRINCIPALE ---
 st.title("🇫🇷 Extracteur VAE -> ClickUp")
-st.markdown("""
-**Mode d'emploi :**
-1. Allez sur la page du candidat (connecté).
-2. Faites `Clic Droit` > `Afficher le Code Source` (ou `Ctrl+U`).
-3. Tout sélectionner (`Ctrl+A`) et Copier (`Ctrl+C`).
-4. Collez le code ci-dessous.
-""")
+st.markdown("Copiez le code source (Ctrl+U) et collez-le ci-dessous.")
 
-# Configuration automatique depuis les SECRETS (Sécurité)
-api_key = st.secrets.get("CLICKUP_API_KEY", "pk_164681139_0EVG3A2732TCZ9GTV6WBEDI94N2JFJP7")
-list_id = st.secrets.get("CLICKUP_LIST_ID", "901207888548")
+# Configuration automatique depuis les SECRETS
+api_key = st.secrets.get("CLICKUP_API_KEY", "")
+list_id = st.secrets.get("CLICKUP_LIST_ID", "")
 
-# Vérification que les secrets sont bien là
 if not api_key or not list_id:
-    st.error("⚠️ La configuration ClickUp (API Key ou List ID) est manquante dans les Secrets.")
+    st.error("⚠️ La configuration ClickUp est manquante dans les Secrets.")
 else:
-    html_input = st.text_area("Collez le Code Source HTML ici", height=300)
+    html_input = st.text_area("Zone de collage HTML", height=300, label_visibility="collapsed", placeholder="Collez le code HTML ici...")
 
     if st.button("Analyser et Envoyer 🚀", type="primary"):
         if not html_input:
             st.warning("Veuillez coller du code HTML.")
         else:
-            with st.spinner("Analyse et envoi en cours..."):
+            with st.spinner("Traitement..."):
                 extracted_data = parse_html_content(html_input)
                 
                 if extracted_data and extracted_data['name'] != "Nom inconnu":
-                    st.success(f"Candidat identifié : **{extracted_data['name']}**")
+                    st.success(f"Candidat : **{extracted_data['name']}**")
                     
-                    # Envoi ClickUp
                     res = send_to_clickup(api_key, list_id, extracted_data)
                     
                     if res.status_code in [200, 201]:
                         st.balloons()
-                        st.success(f"✅ Tâche créée dans ClickUp ! (ID: {res.json().get('id')})")
-                        with st.expander("Voir les données extraites"):
-                            st.json(extracted_data)
+                        st.success(f"✅ Tâche créée dans ClickUp !")
                     else:
                         st.error(f"❌ Erreur ClickUp ({res.status_code}) : {res.text}")
                 else:
-                    st.error("Impossible de lire les données. Vérifiez que vous avez copié le bon code source.")
+                    st.error("Données illisibles.")
