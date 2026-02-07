@@ -3,8 +3,12 @@ import requests
 from bs4 import BeautifulSoup
 import re
 
-# --- CONFIGURATION DE LA PAGE ---
+# --- CONFIGURATION ---
 st.set_page_config(page_title="Extracteur France VAE", page_icon="🇫🇷", layout="wide")
+
+# --- VOS CLÉS CLICKUP (Intégrées directement) ---
+CLICKUP_API_KEY = "pk_164681139_0EVG3A2732TCZ9GTV6WBEDI94N2JFJP7"
+CLICKUP_LIST_ID = "901207888548"
 
 # --- 1. FONCTION D'ANALYSE HTML ---
 def parse_html_content(html_content):
@@ -26,6 +30,7 @@ def parse_html_content(html_content):
             dd_tags = info_block.find_all('dd')
             full_name = dd_tags[0].get_text(strip=True) if dd_tags else "Nom inconnu"
             
+            # Séparation Nom / Prénom
             name_parts = full_name.split(' ', 1)
             data['nom'] = name_parts[0] if name_parts else "Inconnu"
             data['prenom'] = name_parts[1] if len(name_parts) > 1 else ""
@@ -69,9 +74,11 @@ def send_to_clickup(api_key, list_id, data):
         f"📞 **Téléphone:** {data['phone']}\n"
     )
 
+    # Récupération des champs dispos dans votre liste
     fields = get_custom_fields(api_key, list_id)
     custom_fields_payload = []
     
+    # Données à mapper
     mapping_data = {
         "mail": data['email'],
         "email": data['email'],
@@ -85,6 +92,7 @@ def send_to_clickup(api_key, list_id, data):
         "prenom": data['prenom']
     }
     
+    # Algorithme de remplissage des champs
     for field in fields:
         field_name = field['name'].lower()
         field_type = field.get('type', '')
@@ -93,6 +101,8 @@ def send_to_clickup(api_key, list_id, data):
         for key, value in mapping_data.items():
             if field_name == key or (key != "nom" and key in field_name):
                 final_value = value
+                
+                # Formatage téléphone (+33)
                 if field_type == 'phone' and value:
                     digits = ''.join(filter(str.isdigit, value))
                     if digits.startswith('0') and len(digits) == 10:
@@ -109,41 +119,37 @@ def send_to_clickup(api_key, list_id, data):
     payload = {
         "name": f"{data['name']} - {data['certification']}",
         "description": description,
+        # "status": "TO DO",  <-- LIGNE SUPPRIMÉE (Correction Erreur 400)
         "custom_fields": custom_fields_payload,
         "tags": ["francevae"]
     }
 
     return requests.post(url, json=payload, headers=headers)
 
-# --- INTERFACE PRINCIPALE ---
+# --- INTERFACE ---
 st.title("🇫🇷 Extracteur VAE -> ClickUp")
 st.markdown("Copiez le code source (Ctrl+U) et collez-le ci-dessous.")
 
-# Configuration automatique depuis les SECRETS
-api_key = st.secrets.get("CLICKUP_API_KEY", "")
-list_id = st.secrets.get("CLICKUP_LIST_ID", "")
+# Zone de collage
+html_input = st.text_area("Zone HTML", height=300, label_visibility="collapsed", placeholder="Collez le code HTML ici...")
 
-if not api_key or not list_id:
-    st.error("⚠️ La configuration ClickUp est manquante dans les Secrets.")
-else:
-    html_input = st.text_area("Zone de collage HTML", height=300, label_visibility="collapsed", placeholder="Collez le code HTML ici...")
-
-    if st.button("Analyser et Envoyer 🚀", type="primary"):
-        if not html_input:
-            st.warning("Veuillez coller du code HTML.")
-        else:
-            with st.spinner("Traitement..."):
-                extracted_data = parse_html_content(html_input)
+if st.button("Analyser et Envoyer 🚀", type="primary"):
+    if not html_input:
+        st.warning("Veuillez coller du code HTML.")
+    else:
+        with st.spinner("Traitement en cours..."):
+            extracted_data = parse_html_content(html_input)
+            
+            if extracted_data and extracted_data['name'] != "Nom inconnu":
+                st.success(f"Candidat détecté : **{extracted_data['name']}**")
                 
-                if extracted_data and extracted_data['name'] != "Nom inconnu":
-                    st.success(f"Candidat : **{extracted_data['name']}**")
-                    
-                    res = send_to_clickup(api_key, list_id, extracted_data)
-                    
-                    if res.status_code in [200, 201]:
-                        st.balloons()
-                        st.success(f"✅ Tâche créée dans ClickUp !")
-                    else:
-                        st.error(f"❌ Erreur ClickUp ({res.status_code}) : {res.text}")
+                # Appel ClickUp avec les clés intégrées en haut du fichier
+                res = send_to_clickup(CLICKUP_API_KEY, CLICKUP_LIST_ID, extracted_data)
+                
+                if res.status_code in [200, 201]:
+                    st.balloons()
+                    st.success(f"✅ Tâche créée dans ClickUp ! (ID: {res.json().get('id')})")
                 else:
-                    st.error("Données illisibles.")
+                    st.error(f"❌ Erreur ClickUp ({res.status_code}) : {res.text}")
+            else:
+                st.error("Impossible de lire les données. Vérifiez le code source.")
